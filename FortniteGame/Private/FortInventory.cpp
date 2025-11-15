@@ -413,7 +413,6 @@ UFortWeaponItemDefinition::UFortWeaponItemDefinition(const FObjectInitializer& O
 FWeaponStats UFortWeaponItemDefinition::GetWeaponStats() const
 {
 	// Source: line 142267 - "UFortWeaponItemDefinition::GetWeaponStats"
-	// Confidence: HIGH - Exact function name (42 characters)
 
 	return WeaponStats;
 }

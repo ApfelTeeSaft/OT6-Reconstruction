@@ -21,13 +21,11 @@ public:
 
 	/**
 	 * Send a bunch (message bundle) on this channel
-	 * Confidence: MEDIUM - Standard bunch transmission
 	 */
 	virtual FPacketIdRange SendBunch(FOutBunch* Bunch, bool Merge) override;
 
 	/**
 	 * Process received bunch
-	 * Confidence: HIGH - Core receive logic with extensive references
 	 */
 	virtual void ReceivedBunch(FInBunch& Bunch) override;
 
