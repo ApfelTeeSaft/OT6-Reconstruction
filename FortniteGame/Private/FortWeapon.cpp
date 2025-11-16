@@ -14,8 +14,12 @@
 
 AFortWeapon::AFortWeapon(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, WeaponMesh0(nullptr)
+	, WeaponItemDefinition(nullptr)
 	, TriggerType(EFortWeaponTriggerType::OnPress)
 	, WeaponCoreAnimation(EFortWeaponCoreAnimation::Rifle)
+	, bAtMinimumReticleSpread(true)
+	, bUpdateLocalAmmoCount(false)
 	, AmmoCount(999)
 	, MagazineAmmoCount(30)
 	, bIsReloading(false)
@@ -26,12 +30,23 @@ AFortWeapon::AFortWeapon(const FObjectInitializer& ObjectInitializer)
 	, WeaponFireMontage(nullptr)
 	, WeaponFireDownsightsMontage(nullptr)
 	, WeaponFireCue(nullptr)
+	, bIsTargeting(false)
+	, bIsCharging(false)
+	, ChargePercent(0.0f)
 {
 
 	bReplicates = true;
 	bNetUseOwnerRelevancy = true;
 
 	PrimaryActorTick.bCanEverTick = true;
+
+	// Create weapon mesh component
+	WeaponMesh0 = ObjectInitializer.CreateDefaultSubobject<USkeletalMeshComponent>(this, TEXT("WeaponMesh0"));
+	if (WeaponMesh0)
+	{
+		WeaponMesh0->SetupAttachment(RootComponent);
+		WeaponMesh0->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
 }
 
 void AFortWeapon::BeginPlay()
@@ -40,8 +55,13 @@ void AFortWeapon::BeginPlay()
 
 	if (Role == ROLE_Authority)
 	{
-		MagazineAmmoCount = WeaponStats.MagazineSize;
+		MagazineAmmoCount = WeaponStats.ClipSize;
 		CurrentDurability = MaxDurability;
+
+		// Initialize replicated weapon data
+		ReplicatedWeaponData.AmmoInClip = MagazineAmmoCount;
+		ReplicatedWeaponData.Durability = CurrentDurability;
+		ReplicatedWeaponData.bInfiniteDurability = false;
 	}
 }
 
@@ -141,7 +161,8 @@ void AFortWeapon::StartFire()
 	// Set up automatic fire if applicable
 	if (TriggerType == EFortWeaponTriggerType::Automatic)
 	{
-		float FireInterval = 1.0f / WeaponStats.FireRate;
+		// WeaponRateOfFire or use 1.0 / BurstFireDelay
+		float FireInterval = WeaponStats.BurstFireDelay > 0.0f ? WeaponStats.BurstFireDelay : (1.0f / 10.0f);
 		GetWorldTimerManager().SetTimer(
 			FireTimerHandle,
 			this,
@@ -168,7 +189,7 @@ void AFortWeapon::StopFire()
 
 void AFortWeapon::Reload()
 {
-	if (bIsReloading || MagazineAmmoCount >= WeaponStats.MagazineSize)
+	if (bIsReloading || MagazineAmmoCount >= WeaponStats.ClipSize)
 	{
 		return;
 	}
@@ -185,11 +206,11 @@ void AFortWeapon::Reload()
 			ReloadTimerHandle,
 			this,
 			&AFortWeapon::CompleteReload,
-			WeaponStats.ReloadTime,
+			WeaponStats.ReloadSeconds,
 			false
 		);
 
-		UE_LOG(LogNet, Log, TEXT("AFortWeapon: Reloading - %.2f seconds"), WeaponStats.ReloadTime);
+		UE_LOG(LogNet, Log, TEXT("AFortWeapon: Reloading - %.2f seconds"), WeaponStats.ReloadSeconds);
 	}
 }
 
@@ -256,7 +277,7 @@ void AFortWeapon::CompleteReload()
 	bIsReloading = false;
 
 	// Calculate ammo to reload
-	int32 AmmoNeeded = WeaponStats.MagazineSize - MagazineAmmoCount;
+	int32 AmmoNeeded = WeaponStats.ClipSize - MagazineAmmoCount;
 	int32 AmmoToReload = FMath::Min(AmmoNeeded, AmmoCount);
 
 	// Transfer ammo
@@ -266,10 +287,96 @@ void AFortWeapon::CompleteReload()
 	UE_LOG(LogNet, Log, TEXT("AFortWeapon: Reload complete - Magazine: %d, Reserve: %d"), MagazineAmmoCount, AmmoCount);
 }
 
+void AFortWeapon::UseWeaponDurability(float DurabilityCost)
+{
+	if (Role == ROLE_Authority)
+	{
+		ReplicatedWeaponData.Durability -= DurabilityCost;
+		if (ReplicatedWeaponData.Durability < 0.0f)
+		{
+			ReplicatedWeaponData.Durability = 0.0f;
+		}
+
+		UE_LOG(LogNet, Verbose, TEXT("AFortWeapon: UseWeaponDurability - Remaining: %.2f"), ReplicatedWeaponData.Durability);
+	}
+}
+
+bool AFortWeapon::IsWeaponDurabilityDestroyed() const
+{
+	return ReplicatedWeaponData.Durability <= 0.0f;
+}
+
+UParticleSystem* AFortWeapon::GetBulletShellFXTemplate() const
+{
+	if (WeaponItemDefinition)
+	{
+		return WeaponItemDefinition->BulletShellFX;
+	}
+	return nullptr;
+}
+
+bool AFortWeapon::ShouldSpawnBulletShellFX() const
+{
+	// Check if weapon should spawn shell casings
+	return true;
+}
+
+void AFortWeapon::OnWeaponEquipped()
+{
+	UE_LOG(LogNet, Log, TEXT("AFortWeapon: OnWeaponEquipped - %s"), *GetName());
+
+	// Initialize weapon on equip
+	if (Role == ROLE_Authority)
+	{
+		if (WeaponItemDefinition)
+		{
+			// Load weapon stats from item definition
+			WeaponStats = WeaponItemDefinition->GetWeaponStats();
+
+			// Initialize ammo and durability from weapon stats
+			MagazineAmmoCount = WeaponStats.ClipSize;
+			CurrentDurability = WeaponStats.MaxDurability;
+
+			// Initialize replicated weapon data
+			ReplicatedWeaponData.AmmoInClip = MagazineAmmoCount;
+			ReplicatedWeaponData.Durability = CurrentDurability;
+			ReplicatedWeaponData.bInfiniteDurability = WeaponStats.MaxDurability <= 0.0f;
+
+			UE_LOG(LogNet, Log, TEXT("AFortWeapon: Loaded stats from item definition - Damage: %.1f, ClipSize: %d, Durability: %.1f"),
+				WeaponStats.BaseDamage, WeaponStats.ClipSize, CurrentDurability);
+		}
+		else
+		{
+			UE_LOG(LogNet, Warning, TEXT("AFortWeapon: OnWeaponEquipped called but no weapon item definition set"));
+		}
+	}
+}
+
+void AFortWeapon::OnRep_ReplicatedWeaponData()
+{
+
+	UE_LOG(LogNet, Verbose, TEXT("AFortWeapon: OnRep_ReplicatedWeaponData - Ammo: %d, Durability: %.2f"),
+		ReplicatedWeaponData.AmmoInClip, ReplicatedWeaponData.Durability);
+
+	// Update local state from replicated data
+	if (bUpdateLocalAmmoCount)
+	{
+		MagazineAmmoCount = ReplicatedWeaponData.AmmoInClip;
+	}
+
+	// Check durability status
+	if (IsWeaponDurabilityDestroyed())
+	{
+		UE_LOG(LogNet, Warning, TEXT("AFortWeapon: Weapon durability destroyed!"));
+		// Could trigger broken weapon effects here
+	}
+}
+
 void AFortWeapon::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
+	DOREPLIFETIME(AFortWeapon, ReplicatedWeaponData);
 	DOREPLIFETIME(AFortWeapon, AmmoCount);
 	DOREPLIFETIME(AFortWeapon, MagazineAmmoCount);
 	DOREPLIFETIME(AFortWeapon, bIsReloading);
@@ -358,7 +465,9 @@ bool AFortWeaponRanged::PerformHitscan(FHitResult& OutHit)
 	);
 	FVector FireDirection = SpreadRotation.RotateVector(ForwardVector);
 
-	FVector EndLocation = StartLocation + (FireDirection * WeaponStats.Range);
+	// Use max range from weapon stats (effective range * 2 for max trace distance)
+	float MaxTraceRange = WeaponStats.EffectiveRange * 2.0f;
+	FVector EndLocation = StartLocation + (FireDirection * MaxTraceRange);
 
 	// Perform line trace
 	FCollisionQueryParams QueryParams;
@@ -391,9 +500,9 @@ void AFortWeaponRanged::ApplyWeaponDamage(const FHitResult& Hit)
 
 	// Apply damage
 	FDamageEvent DamageEvent;
-	Hit.GetActor()->TakeDamage(WeaponStats.Damage, DamageEvent, OwnerPawn ? OwnerPawn->GetController() : nullptr, this);
+	Hit.GetActor()->TakeDamage(WeaponStats.BaseDamage, DamageEvent, OwnerPawn ? OwnerPawn->GetController() : nullptr, this);
 
-	UE_LOG(LogNet, Verbose, TEXT("AFortWeaponRanged: Applied %.2f damage to %s"), WeaponStats.Damage, *Hit.GetActor()->GetName());
+	UE_LOG(LogNet, Verbose, TEXT("AFortWeaponRanged: Applied %.2f damage to %s"), WeaponStats.BaseDamage, *Hit.GetActor()->GetName());
 }
 
 AActor* AFortWeaponRanged::SpawnProjectile(const FVector& Direction)
@@ -437,7 +546,7 @@ AFortWeaponMelee::AFortWeaponMelee(const FObjectInitializer& ObjectInitializer)
 	TriggerType = EFortWeaponTriggerType::OnPress;
 
 	// Melee weapons don't use ammo in traditional sense
-	WeaponStats.MagazineSize = 999;
+	WeaponStats.ClipSize = 999;
 }
 
 bool AFortWeaponMelee::TryFire()
@@ -540,9 +649,9 @@ void AFortWeaponMelee::ApplyMeleeDamage(const TArray<FHitResult>& Hits)
 		if (Hit.GetActor())
 		{
 			FDamageEvent DamageEvent;
-			Hit.GetActor()->TakeDamage(WeaponStats.Damage, DamageEvent, OwnerPawn ? OwnerPawn->GetController() : nullptr, this);
+			Hit.GetActor()->TakeDamage(WeaponStats.BaseDamage, DamageEvent, OwnerPawn ? OwnerPawn->GetController() : nullptr, this);
 
-			UE_LOG(LogNet, Verbose, TEXT("AFortWeaponMelee: Applied %.2f damage to %s"), WeaponStats.Damage, *Hit.GetActor()->GetName());
+			UE_LOG(LogNet, Verbose, TEXT("AFortWeaponMelee: Applied %.2f damage to %s"), WeaponStats.BaseDamage, *Hit.GetActor()->GetName());
 		}
 	}
 }
@@ -560,7 +669,6 @@ AFortWeaponHarvest::AFortWeaponHarvest(const FObjectInitializer& ObjectInitializ
 	, HarvestDamageMultiplier(2.0f)
 	, ResourceGatherMultiplier(1.0f)
 {
-	// Source: EFortItemType::WeaponHarvest
 
 	WeaponCoreAnimation = EFortWeaponCoreAnimation::MeleeOneHand;
 
@@ -591,7 +699,7 @@ void AFortWeaponHarvest::HarvestResources(AActor* Target)
 	// Apply extra damage to buildings
 	// Spawn resource pickups
 
-	float HarvestDamage = WeaponStats.Damage * HarvestDamageMultiplier;
+	float HarvestDamage = WeaponStats.BaseDamage * HarvestDamageMultiplier;
 
 	FDamageEvent DamageEvent;
 	Target->TakeDamage(HarvestDamage, DamageEvent, OwnerPawn ? OwnerPawn->GetController() : nullptr, this);

@@ -7,7 +7,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "FortEnums.h"
+#include "FortWeaponData.h"
 #include "FortWeapon.generated.h"
+
+class UFortWeaponItemDefinition;
+class USkeletalMeshComponent;
 
 /**
  * EFortWeaponTriggerType - Weapon firing trigger modes
@@ -48,41 +52,8 @@ enum class EFortWeaponCoreAnimation : uint8
 	EFortWeaponCoreAnimation_MAX = 17
 };
 
-/**
- * Weapon stats structure
- */
-USTRUCT(BlueprintType)
-struct FWeaponStats
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly)
-	float Damage;
-
-	UPROPERTY(BlueprintReadOnly)
-	float FireRate;
-
-	UPROPERTY(BlueprintReadOnly)
-	float ReloadTime;
-
-	UPROPERTY(BlueprintReadOnly)
-	int32 MagazineSize;
-
-	UPROPERTY(BlueprintReadOnly)
-	float Range;
-
-	UPROPERTY(BlueprintReadOnly)
-	float Accuracy;
-
-	FWeaponStats()
-		: Damage(10.0f)
-		, FireRate(1.0f)
-		, ReloadTime(2.0f)
-		, MagazineSize(30)
-		, Range(5000.0f)
-		, Accuracy(1.0f)
-	{}
-};
+// Note: Weapon stats structures are now defined in FortWeaponData.h
+// FFortWeaponStats and FFortReplicatedWeaponData contain comprehensive weapon properties
 
 /**
  * AFortWeapon - Base weapon class
@@ -132,6 +103,60 @@ public:
 	virtual void StopWeaponFireFX();
 
 	/**
+	 * Play impact effects
+	 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fort|Weapon|Effects")
+	void OnPlayImpactFX(const FHitResult& Hit);
+
+	/**
+	 * Play reload effects
+	 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fort|Weapon|Effects")
+	void OnPlayReloadFX();
+
+	/**
+	 * Use weapon durability
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fort|Weapon")
+	virtual void UseWeaponDurability(float DurabilityCost);
+
+	/**
+	 * Check if weapon durability is destroyed
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fort|Weapon")
+	bool IsWeaponDurabilityDestroyed() const;
+
+	/**
+	 * Get bullet shell FX template
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fort|Weapon|Effects")
+	virtual class UParticleSystem* GetBulletShellFXTemplate() const;
+
+	/**
+	 * Should spawn bullet shell FX
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Fort|Weapon|Effects")
+	virtual bool ShouldSpawnBulletShellFX() const;
+
+	/**
+	 * Called when targeting state changes
+	 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fort|Weapon")
+	void OnSetTargeting(bool bIsTargeting);
+
+	/**
+	 * Called when charge starts
+	 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fort|Weapon")
+	void OnStartCharge();
+
+	/**
+	 * Called when weapon is equipped
+	 */
+	UFUNCTION()
+	virtual void OnWeaponEquipped();
+
+	/**
 	 * Attempt to fire weapon
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Fort|Weapon")
@@ -161,6 +186,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Fort|Weapon")
 	virtual bool CanFire() const;
 
+	/**
+	 * Weapon mesh component
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Fort|Weapon")
+	USkeletalMeshComponent* WeaponMesh0;
+
+	/**
+	 * Weapon item definition
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Fort|Weapon")
+	UFortWeaponItemDefinition* WeaponItemDefinition;
+
 	/** Weapon configuration */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fort|Weapon")
 	EFortWeaponTriggerType TriggerType;
@@ -168,8 +205,35 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fort|Weapon")
 	EFortWeaponCoreAnimation WeaponCoreAnimation;
 
+	/**
+	 * Weapon statistics (using comprehensive FFortWeaponStats from FortWeaponData.h)
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fort|Weapon")
-	FWeaponStats WeaponStats;
+	FFortWeaponStats WeaponStats;
+
+	/**
+	 * Replicated weapon data
+	 */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_ReplicatedWeaponData, Category = "Fort|Weapon")
+	FFortReplicatedWeaponData ReplicatedWeaponData;
+
+	/**
+	 * Item entry GUID
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Fort|Weapon")
+	FGuid ItemEntryGuid;
+
+	/**
+	 * At minimum reticle spread
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Fort|Weapon")
+	bool bAtMinimumReticleSpread;
+
+	/**
+	 * Update local ammo count
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Fort|Weapon")
+	bool bUpdateLocalAmmoCount;
 
 	/** Weapon state */
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Fort|Weapon")
@@ -207,6 +271,12 @@ public:
 	class USoundBase* WeaponFireCue;
 
 protected:
+	/**
+	 * Replication callback for weapon data
+	 */
+	UFUNCTION()
+	virtual void OnRep_ReplicatedWeaponData();
+
 	/** Timers */
 	FTimerHandle FireTimerHandle;
 	FTimerHandle ReloadTimerHandle;
@@ -216,6 +286,17 @@ protected:
 
 	/** Complete reload */
 	virtual void CompleteReload();
+
+	/** Is targeting */
+	bool bIsTargeting;
+
+	/** Is charging */
+	bool bIsCharging;
+
+	/**
+	 * Charge percent
+	 */
+	float ChargePercent;
 };
 
 /**
