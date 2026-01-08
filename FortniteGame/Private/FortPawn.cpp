@@ -6,7 +6,7 @@
 #include "GameFramework/PlayerController.h"
 
 AFortPawn::AFortPawn(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UFortCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 	, Health(100.0f)
 	, MaxHealth(100.0f)
 	, Shield(0.0f)
@@ -15,6 +15,26 @@ AFortPawn::AFortPawn(const FObjectInitializer& ObjectInitializer)
 {
 	bReplicates = true;
 	bAlwaysRelevant = true;
+
+	// Cast to Fort movement component for additional configuration
+	UFortCharacterMovementComponent* FortMovement = Cast<UFortCharacterMovementComponent>(GetCharacterMovement());
+	if (FortMovement)
+	{
+		// Configure movement defaults for Fortnite gameplay
+		FortMovement->MaxWalkSpeed = 600.0f;
+		FortMovement->MaxWalkSpeedCrouched = 300.0f;
+		FortMovement->JumpZVelocity = 420.0f;
+		FortMovement->GravityScale = 1.0f;
+		FortMovement->AirControl = 0.2f;
+		FortMovement->GroundFriction = 8.0f;
+		FortMovement->BrakingDecelerationWalking = 2048.0f;
+		FortMovement->BrakingDecelerationFalling = 0.0f;
+		FortMovement->BrakingDecelerationFlying = 3000.0f;
+		FortMovement->bOrientRotationToMovement = true;
+		FortMovement->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+
+		UE_LOG(LogNet, Log, TEXT("FortPawn: Created with UFortCharacterMovementComponent"));
+	}
 }
 
 void AFortPawn::BeginPlay()

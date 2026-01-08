@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "FortCharacterMovementComponent.h"
 #include "FortPawn.generated.h"
 
 /**
